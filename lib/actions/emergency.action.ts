@@ -3,11 +3,10 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import { createClient } from '../server';
-// import { createClient } from '@/utils/supabase/server'; // Adjust to your server client path
+import { createClient } from '../server'; // Adjust to your server client path
 
 // This is the same type definition, you can share it or redefine it
-export type ActionState = {
+export type ActionState = { 
   error?: string;
   message?: string;
 };
@@ -34,28 +33,64 @@ export async function reportGeneralEmergency(prevState: ActionState, formData: F
   });
 
   if (!validatedFields.success) {
-    return { error: validatedFields.error.errors.map(e => e.message).join(', ') };
+    const fieldErrors = validatedFields.error.flatten().fieldErrors;
+    const errorMessage = Object.values(fieldErrors).flat()[0] || 'Invalid data provided.';
+    return { error: errorMessage };
   }
 
   const { emergencyType, locationDetails, severity } = validatedFields.data;
 
-  // ✅ **THE CRITICAL CHANGE**: We now insert into the 'emergencies' table.
-  const { data: newEmergency, error } = await supabase.from('emergencies').insert({
+  const { data: newEmergency, error: insertError } = await supabase.from('emergencies').insert({
     reported_by: user.id,
     emergency_type: emergencyType,
     severity: severity,
     location_details: locationDetails,
-    status: 'Active',
-  }).select().single();
+    status: 'Active', // Default status for a new emergency
+  }).select().single(); // Get the newly created row back
 
-  if (error) {
-    console.error('Emergency Insert Error:', error);
-    return { error: 'Failed to report emergency.' };
+  if (insertError) {
+    console.error('Emergency Insert Error:', insertError);
+    return { error: 'Failed to report emergency. Please try again.' };
   }
 
-  // Your Zapier webhook logic can go here, sending the `newEmergency` data
-  // ...
+  if (!newEmergency) {
+    console.warn('New emergency data not returned after insert, though no DB error reported. Skipping Zapier call.');
+    // Proceed with success message as DB operation might have succeeded without returning data (e.g., RLS)
+  }
 
-  revalidatePath('/coordinator/dashboard');
-  return { message: `${emergencyType} emergency reported successfully!` };
+  // --- 🚀 Send to Zapier ---
+  if (newEmergency && process.env.ZAPIER_EMERGENCY_WEBHOOK_URL) {
+    try {
+      const payload = {
+        id: newEmergency.id,
+        type: newEmergency.emergency_type,
+        severity: newEmergency.severity,
+        location: newEmergency.location_details,
+        reported_at: newEmergency.created_at,
+        reported_by_email: user.email,
+        status: newEmergency.status,
+      };
+
+      await fetch(process.env.ZAPIER_EMERGENCY_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      console.log('Emergency data successfully sent to Zapier.');
+
+    } catch (zapierError) {
+      console.error("Failed to send emergency data to Zapier:", zapierError);
+      // Log the error, but don't block the user flow.
+    }
+  } else if (newEmergency) { // Only log warning if newEmergency exists but URL doesn't
+    console.warn("ZAPIER_EMERGENCY_WEBHOOK_URL is not set. Skipping webhook call.");
+  }
+  // --- End of Zapier Section ---
+
+  revalidatePath('/coordinator/dashboard'); // Or any other relevant path
+  // Consider revalidating paths where emergencies are displayed
+  // e.g., revalidatePath('/emergencies');
+  // revalidatePath('/alerts');
+
+  return { message: `${emergencyType} emergency reported successfully! Key personnel have been notified.` };
 }
