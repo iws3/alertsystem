@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Use a known valid model name. Check Google AI documentation for the latest.
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" }); 
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();

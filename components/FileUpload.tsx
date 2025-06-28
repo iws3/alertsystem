@@ -1,95 +1,82 @@
-"use client"
-// components/FileUpload.tsx
-import React, { useCallback } from 'react';
-import { useDropzone, FileWithPath } from 'react-dropzone';
-import Papa, { ParseResult } from 'papaparse';
-import { UploadCloud, FileText } from 'lucide-react';
+"use client";
+import React, { useCallback, useState } from 'react';
+import { useDropzone } from 'react-dropzone';
+import Papa from 'papaparse';
+import { UploadCloud, FileText, CheckCircle, XCircle } from 'lucide-react';
+
+type DataPoint = Record<string, any>;
 
 interface FileUploadProps {
-  onFileProcessed: (data: Record<string, any>[], fileName: string) => void;
-  acceptedTypes?: string; // e.g., '.csv'
+  onFileProcessed: (data: DataPoint[], headers: string[], numericHeaders: string[]) => void;
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed, acceptedTypes = '.csv' }) => {
-  const onDrop = useCallback((acceptedFiles: FileWithPath[]) => {
+const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed }) => {
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onDrop = useCallback((acceptedFiles: File[]) => {
+    setError(null);
+    setFileName(null);
     const file = acceptedFiles[0];
+
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event: ProgressEvent<FileReader>) => {
-        try {
-          const csvText = event.target?.result as string;
-          if (!csvText) {
-            alert("Could not read file content.");
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: true,
+        complete: (results) => {
+          if (results.errors.length) {
+            setError(`Error parsing ${file.name}: ${results.errors[0].message}`);
             return;
           }
-          Papa.parse(csvText, {
-            header: true,
-            skipEmptyLines: true,
-            dynamicTyping: true, // Automatically converts numbers
-            complete: (results: ParseResult<Record<string, any>>) => {
-              if (results.errors.length > 0) {
-                console.error("CSV Parsing Errors:", results.errors);
-                alert("Error parsing CSV file: " + results.errors.map(e => e.message).join('\n'));
-                return;
-              }
-              onFileProcessed(results.data, file.name);
-            },
-            error: (error: Error) => { // PapaParse ParseError might be more specific
-              console.error("CSV Parsing Error:", error);
-              alert("Error parsing CSV file: " + error.message);
-            }
-          });
-        } catch (e: any) {
-            console.error("File Reading Error:", e);
-            alert("Error reading file: " + e.message);
+          if (!results.data || results.data.length === 0) {
+            setError("The CSV file is empty or could not be read.");
+            return;
+          }
+          
+          setFileName(file.name);
+          const data = results.data as DataPoint[];
+          const headers = Object.keys(data[0]);
+          const numericHeaders = headers.filter(h => typeof data[0][h] === 'number' && !isNaN(data[0][h]));
+
+          if (numericHeaders.length < 2) {
+            setError("Dataset must contain at least two numeric columns for analysis.");
+            return;
+          }
+          onFileProcessed(data, headers, numericHeaders);
+        },
+        error: (err) => {
+          setError(`Failed to parse file: ${err?.message}`);
         }
-      };
-      reader.readAsText(file);
+      });
     }
   }, [onFileProcessed]);
 
-  const acceptConfig: { [key: string]: string[] } = {};
-  if (acceptedTypes === '.csv') {
-    acceptConfig['text/csv'] = [acceptedTypes];
-  } else {
-    // Handle other types or provide a more generic way
-    acceptConfig[acceptedTypes] = [acceptedTypes];
-  }
-
-
-  const { getRootProps, getInputProps, isDragActive, acceptedFiles } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, isDragAccept, isDragReject } = useDropzone({
     onDrop,
-    accept: acceptConfig,
-    maxFiles: 1,
+    accept: { 'text/csv': ['.csv'] },
+    multiple: false,
   });
 
-  const acceptedFile = acceptedFiles[0];
+  const baseStyle = 'p-6 border-2 border-dashed rounded-xl cursor-pointer transition-all duration-200 ease-in-out flex flex-col items-center justify-center text-center';
+  const activeStyle = 'border-indigo-500 bg-indigo-500/10';
+  const acceptStyle = 'border-green-500 bg-green-500/10';
+  const rejectStyle = 'border-red-500 bg-red-500/10';
 
   return (
-    <div
-      {...getRootProps()}
-      className={`p-6 border-2 border-dashed rounded-lg cursor-pointer transition-colors
-        ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}`}
-    >
-      <input {...getInputProps()} />
-      <div className="flex flex-col items-center justify-center text-center">
-        <UploadCloud size={40} className="text-gray-400 mb-3" />
-        {isDragActive ? (
-          <p className="text-blue-600 font-semibold">Drop the files here ...</p>
-        ) : (
-          <p className="text-gray-500">
-            Drag 'n' drop a {acceptedTypes} file here, or click to select file
-          </p>
-        )}
-        {acceptedFile && (
-          <div className="mt-3 bg-green-50 p-2 rounded-md flex items-center text-sm text-green-700">
-            <FileText size={16} className="mr-2" />
-            Selected: {acceptedFile.name}
-          </div>
-        )}
+    <div className="w-full">
+      <div {...getRootProps({ className: `${baseStyle} ${isDragActive ? activeStyle : ''} ${isDragAccept ? acceptStyle : ''} ${isDragReject ? rejectStyle : ''}` })}>
+        <input {...getInputProps()} />
+        <UploadCloud size={40} className={`mb-3 transition-colors ${isDragAccept ? 'text-green-500' : isDragReject ? 'text-red-500' : 'text-slate-500'}`} />
+        {isDragActive ? <p className="font-semibold text-indigo-400">Drop the file here...</p> : <p className="text-slate-400">Drag & drop a CSV file here, or click to select</p>}
       </div>
+      {fileName && !error && (
+        <div className="mt-3 p-2 bg-green-500/10 text-green-300 rounded-md flex items-center gap-2 text-sm"><CheckCircle size={16}/><span>{fileName} loaded successfully.</span></div>
+      )}
+      {error && (
+        <div className="mt-3 p-2 bg-red-500/10 text-red-400 rounded-md text-sm flex items-center gap-2"><XCircle size={16}/><span>{error}</span></div>
+      )}
     </div>
   );
 };
-
 export default FileUpload;
